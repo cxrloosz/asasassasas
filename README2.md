@@ -6,7 +6,7 @@ local function notify(text)
         for _ = 1, 10 do
             local ok = pcall(function()
                 game:GetService("StarterGui"):SetCore("SendNotification", {
-                    Title = "RC2",
+                    Title = Carlinhos",
                     Text = text,
                     Duration = 8,
                 })
