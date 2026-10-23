@@ -481,7 +481,7 @@ local function buildGui()
     titleText.Size = UDim2.new(1, -40, 1, 0)
     titleText.Position = UDim2.new(0, 10, 0, 0)
     titleText.BackgroundTransparency = 1
-    titleText.Text = "RC2 HUD"
+    titleText.Text = "Carlinhos Exuzete"
     titleText.TextXAlignment = Enum.TextXAlignment.Left
     titleText.Font = Enum.Font.GothamBold
     titleText.TextSize = 14
