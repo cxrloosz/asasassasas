@@ -52,6 +52,16 @@ local equipBestToken = 0
 local luaCheiaToken = 0
 local fuseTokens = {}
 
+-- Inicializa o histórico de servidores visitados para evitar loops
+if getgenv then
+    if not getgenv().RC2_VisitedServers then
+        getgenv().RC2_VisitedServers = {}
+    end
+    if game.JobId and game.JobId ~= "" then
+        getgenv().RC2_VisitedServers[game.JobId] = true
+    end
+end
+
 local function cleanup()
     cleaned = true
     farmToken += 1
@@ -204,7 +214,7 @@ local function setStatus(text)
 end
 
 ------------------------------------------------------------------
--- SERVER HOP
+-- SERVER HOP (ATUALIZADO COM ANT-LOOP)
 ------------------------------------------------------------------
 
 local hopping = false
@@ -212,30 +222,53 @@ local hopping = false
 local function serverHop()
     if hopping or dead() or (not config.farm and not config.exuLuaCheia) then return end
     hopping = true
-    setStatus("Procurando servidor...")
+    setStatus("Procurando servidor novo...")
 
     local candidates = {}
-    local cursor = ""
 
-    for _ = 1, 3 do
+    -- Tenta buscar em ordens diferentes (Asc e Desc) para pegar servidores variados
+    for _, sortOrder in ipairs({"Asc", "Desc"}) do
+        local cursor = ""
+        for _ = 1, 2 do
+            local ok, result = pcall(function()
+                local url = "https://games.roblox.com/v1/games/"
+                    .. game.PlaceId
+                    .. "/servers/Public?sortOrder=" .. sortOrder .. "&limit=100"
+                    .. (cursor ~= "" and "&cursor=" .. cursor or "")
+                return HttpService:JSONDecode(game:HttpGet(url))
+            end)
+
+            if not ok or not result or not result.data then break end
+
+            for _, s in ipairs(result.data) do
+                -- Ignora o servidor atual e servidores que já visitou nesta sessão
+                if s.id ~= game.JobId 
+                    and not (getgenv().RC2_VisitedServers and getgenv().RC2_VisitedServers[s.id])
+                    and s.playing < s.maxPlayers - 1 then
+                    table.insert(candidates, s.id)
+                end
+            end
+
+            cursor = result.nextPageCursor or ""
+            if cursor == "" then break end
+        end
+    end
+
+    -- Se esgotou todos os servidores não visitados, limpa o histórico para não travar
+    if #candidates == 0 and getgenv() then
+        getgenv().RC2_VisitedServers = { [game.JobId] = true }
+        -- Faz uma busca rápida padrão para pegar qualquer um disponível
         local ok, result = pcall(function()
-            local url = "https://games.roblox.com/v1/games/"
-                .. game.PlaceId
-                .. "/servers/Public?sortOrder=Asc&limit=100"
-                .. (cursor ~= "" and "&cursor=" .. cursor or "")
+            local url = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"
             return HttpService:JSONDecode(game:HttpGet(url))
         end)
-
-        if not ok or not result or not result.data then break end
-
-        for _, s in ipairs(result.data) do
-            if s.id ~= game.JobId and s.playing < s.maxPlayers - 1 then
-                table.insert(candidates, s.id)
+        if ok and result and result.data then
+            for _, s in ipairs(result.data) do
+                if s.id ~= game.JobId and s.playing < s.maxPlayers - 1 then
+                    table.insert(candidates, s.id)
+                end
             end
         end
-
-        cursor = result.nextPageCursor or ""
-        if cursor == "" then break end
     end
 
     hopping = false
@@ -245,6 +278,9 @@ local function serverHop()
 
     if #candidates > 0 then
         local id = candidates[math.random(#candidates)]
+        if getgenv() and getgenv().RC2_VisitedServers then
+            getgenv().RC2_VisitedServers[id] = true
+        end
         pcall(function()
             TeleportService:TeleportToPlaceInstance(
                 game.PlaceId, id, LocalPlayer
@@ -440,7 +476,6 @@ local function runExuLuaCheia()
         local exuObj
         local start = tick()
 
-        -- Busca pelo objeto no Workspace por exatamente 4 segundos
         while alive() and not exuObj and (tick() - start < 4) do
             exuObj = Workspace:FindFirstChild("Exu_ExuLuaCheia", true)
             if not exuObj then task.wait(0.2) end
@@ -448,7 +483,6 @@ local function runExuLuaCheia()
 
         if not alive() then return end
 
-        -- Se não achou após 4 segundos, realiza o serverHop imediatamente
         if not exuObj then
             setStatus("Não encontrado (4s), trocando servidor...")
             task.wait(0.5)
