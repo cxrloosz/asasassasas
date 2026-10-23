@@ -1,4 +1,4 @@
--- RC2 HUD: Auto Nests + Server Hop + Fuse + Auto Spin + Equip Best
+-- RC2 HUD: Auto Nests + Server Hop + Fuse + Auto Spin + Equip Best + Exu Lua Cheia
 
 local function notify(text)
     task.spawn(function()
@@ -49,6 +49,7 @@ local connections = {}
 local farmToken = 0
 local spinToken = 0
 local equipBestToken = 0
+local luaCheiaToken = 0
 local fuseTokens = {}
 
 local function cleanup()
@@ -56,6 +57,7 @@ local function cleanup()
     farmToken += 1
     spinToken += 1
     equipBestToken += 1
+    luaCheiaToken += 1
     for k in pairs(fuseTokens) do
         fuseTokens[k] += 1
     end
@@ -108,7 +110,8 @@ local config = {
     farm = false,
     spin = false,
     fuse = {},
-    equipBest = false
+    equipBest = false,
+    exuLuaCheia = false
 }
 
 pcall(function()
@@ -118,6 +121,7 @@ pcall(function()
             config.farm = data.farm == true
             config.spin = data.spin == true
             config.equipBest = data.equipBest == true
+            config.exuLuaCheia = data.exuLuaCheia == true
             config.fuse = type(data.fuse) == "table" and data.fuse or {}
         end
     end
@@ -206,7 +210,7 @@ end
 local hopping = false
 
 local function serverHop()
-    if hopping or dead() or not config.farm then return end
+    if hopping or dead() or (not config.farm and not config.exuLuaCheia) then return end
     hopping = true
     setStatus("Procurando servidor...")
 
@@ -235,7 +239,7 @@ local function serverHop()
     end
 
     hopping = false
-    if dead() or not config.farm then return end
+    if dead() or (not config.farm and not config.exuLuaCheia) then return end
 
     queueScript()
 
@@ -405,6 +409,85 @@ local function setFarm(on)
         runFarm()
     else
         farmToken += 1
+        setStatus("Parado")
+    end
+end
+
+------------------------------------------------------------------
+-- AUTO EXU LUA CHEIA
+------------------------------------------------------------------
+
+local function runExuLuaCheia()
+    luaCheiaToken += 1
+    local my = luaCheiaToken
+
+    local function alive()
+        return config.exuLuaCheia and my == luaCheiaToken and not dead()
+    end
+
+    task.delay(MAX_RUNTIME, function()
+        if alive() then
+            setStatus("Tempo limite Exu Lua Cheia, trocando...")
+            serverHop()
+        end
+    end)
+
+    task.spawn(function()
+        setStatus("Procurando Exu Lua Cheia...")
+        enablePrompts()
+        getRoot()
+
+        local exuObj
+        local start = tick()
+
+        while alive() and not exuObj and tick() - start < 30 do
+            exuObj = Workspace:FindFirstChild("Exu_ExuLuaCheia", true)
+            if not exuObj then task.wait(0.5) end
+        end
+
+        if not alive() then return end
+
+        if not exuObj then
+            setStatus("Exu Lua Cheia não encontrado, trocando...")
+            task.wait(1)
+            return serverHop()
+        end
+
+        local cf = getObjectCFrame(exuObj)
+        if cf then
+            setStatus("Capturando Exu Lua Cheia...")
+
+            local root = getRoot()
+            if root then
+                root.CFrame = cf + Vector3.new(0, 1.5, 0)
+            end
+
+            task.wait(0.3)
+            forceInteract(exuObj)
+            task.wait(0.2)
+
+            root = getRoot()
+            if root then root.CFrame = RETURN_CFRAME end
+
+            task.wait(0.6)
+        end
+
+        if not alive() then return end
+
+        setStatus("Exu Lua Cheia capturado, trocando...")
+        task.wait(1)
+        serverHop()
+    end)
+end
+
+local function setExuLuaCheia(on)
+    config.exuLuaCheia = on
+    saveConfig()
+
+    if on then
+        runExuLuaCheia()
+    else
+        luaCheiaToken += 1
         setStatus("Parado")
     end
 end
@@ -752,7 +835,8 @@ local function buildGui()
     -- Auto Farm
     makeLabel("AUTO FARM")
     makeToggle(content, "Auto Nests + Hop", config.farm, setFarm)
-    statusLabel = makeLabel(config.farm and "Status: Ligado" or "Status: Parado")
+    makeToggle(content, "Auto Exu Lua Cheia", config.exuLuaCheia, setExuLuaCheia)
+    statusLabel = makeLabel((config.farm or config.exuLuaCheia) and "Status: Ligado" or "Status: Parado")
 
     -- Auto Spin
     makeLabel("SPIN")
@@ -842,6 +926,10 @@ end)
 
 if config.farm then
     runFarm()
+end
+
+if config.exuLuaCheia then
+    runExuLuaCheia()
 end
 
 for _, name in ipairs(FUSE_NAMES) do
