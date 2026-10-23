@@ -46,11 +46,6 @@ if not isAllowedGame() then
     return
 end
 
-while true do
-game:GetService("ReplicatedStorage"):WaitForChild("Remotes"):WaitForChild("Spin"):InvokeServer()
-task.wait()
-end
-
 local SCRIPT_URL = "https://raw.githubusercontent.com/cxrloosz/asasassasas/refs/heads/main/README.md"
 local CONFIG_FILE = "rc2_config.json"
 local LOCAL_FILE = "rc2_hud.lua" -- cópia deste script na pasta workspace do executor
