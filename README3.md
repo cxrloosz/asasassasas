@@ -1,6 +1,5 @@
--- RC2 HUD: Auto Nests + Server Hop + Fuse loops (com toggles)
+-- RC2 HUD: Auto Nests + Server Hop + Fuse + Auto Spin + Equip Best
 
--- Notificação na tela (não depende do console)
 local function notify(text)
     task.spawn(function()
         for _ = 1, 10 do
@@ -17,72 +16,68 @@ local function notify(text)
     end)
 end
 
--- Só roda no jogo específico (aceita PlaceId ou GameId/UniverseId)
-local ALLOWED_IDS = { 103076400317371 } -- PlaceIds (ou GameId) permitidos
+local ALLOWED_IDS = { 103076400317371 }
+
 local function isAllowedGame()
     for _, id in ipairs(ALLOWED_IDS) do
-        if game.PlaceId == id or game.GameId == id then return true end
+        if game.PlaceId == id or game.GameId == id then
+            return true
+        end
     end
     return false
 end
+
 if not isAllowedGame() then
-    -- Jogo errado: remove qualquer HUD/loop que tenha sobrado e encerra
-    notify("Jogo errado. PlaceId: " .. tostring(game.PlaceId) .. " | GameId: " .. tostring(game.GameId))
-    warn("[RC2] Jogo diferente do permitido. PlaceId atual: " .. tostring(game.PlaceId)
-        .. " | GameId atual: " .. tostring(game.GameId))
-    pcall(function()
-        if getgenv and getgenv().RC2_CLEANUP then getgenv().RC2_CLEANUP() end
-    end)
-    pcall(function()
-        for _, c in ipairs(game:GetService("CoreGui"):GetChildren()) do
-            if c.Name == "RC2_HUD" then c:Destroy() end
-        end
-    end)
-    pcall(function()
-        for _, c in ipairs(gethui():GetChildren()) do
-            if c.Name == "RC2_HUD" then c:Destroy() end
-        end
-    end)
+    notify("Jogo não permitido.")
     return
 end
 
 local SCRIPT_URL = "https://raw.githubusercontent.com/cxrloosz/asasassasas/refs/heads/main/README3.md"
 local CONFIG_FILE = "rc2_config.json"
-local LOCAL_FILE = "rc2_hud.lua" -- cópia deste script na pasta workspace do executor
-print("[RC2] Script iniciado | PlaceId: " .. tostring(game.PlaceId))
-local FUSE_DELAY = 0.15   -- segundos entre cada Fuse (aumente se der lag/kick)
-local MAX_RUNTIME = 120   -- segundos: se o farm travar, força o hop
+local LOCAL_FILE = "rc2_hud.lua"
+
+local FUSE_DELAY = 0.15
+local MAX_RUNTIME = 120
 local FUSE_NAMES = { "ExuSeteChaves", "PombagiraRainha", "ExuVeludo" }
 local FUSE_LEVELS = { 1, 2, 3, 4 }
+local EQUIP_BEST_DELAY = 1
 
-------------------------------------------------------------------
--- Instância única (resolve execuções duplicadas após o hop)
-------------------------------------------------------------------
 local INSTANCE_ID = tostring(math.random(1, 1e9)) .. "-" .. tostring(os.clock())
 local cleaned = false
 local gui, dragConn
 local connections = {}
 local farmToken = 0
 local spinToken = 0
+local equipBestToken = 0
 local fuseTokens = {}
 
 local function cleanup()
     cleaned = true
     farmToken += 1
     spinToken += 1
-    for k in pairs(fuseTokens) do fuseTokens[k] += 1 end
-    for _, c in ipairs(connections) do pcall(function() c:Disconnect() end) end
-    pcall(function() if dragConn then dragConn:Disconnect() end end)
-    pcall(function() if gui then gui:Destroy() end end)
+    equipBestToken += 1
+    for k in pairs(fuseTokens) do
+        fuseTokens[k] += 1
+    end
+    for _, c in ipairs(connections) do
+        pcall(function() c:Disconnect() end)
+    end
+    pcall(function()
+        if dragConn then dragConn:Disconnect() end
+    end)
+    pcall(function()
+        if gui then gui:Destroy() end
+    end)
 end
 
 if getgenv then
-    if getgenv().RC2_CLEANUP then pcall(getgenv().RC2_CLEANUP) end
+    if getgenv().RC2_CLEANUP then
+        pcall(getgenv().RC2_CLEANUP)
+    end
     getgenv().RC2_CLEANUP = cleanup
     getgenv().RC2_ID = INSTANCE_ID
 end
 
--- true se esta instância foi encerrada ou substituída por outra mais nova
 local function dead()
     if not cleaned and getgenv and getgenv().RC2_ID ~= INSTANCE_ID then
         cleanup()
@@ -90,12 +85,11 @@ local function dead()
     return cleaned
 end
 
-------------------------------------------------------------------
--- Serviços
-------------------------------------------------------------------
 repeat task.wait() until game:IsLoaded()
+
 local Players = game:GetService("Players")
 repeat task.wait() until Players.LocalPlayer
+
 local LocalPlayer = Players.LocalPlayer
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -107,9 +101,15 @@ local UserInputService = game:GetService("UserInputService")
 if dead() then return end
 
 ------------------------------------------------------------------
--- Config persistente (sobrevive ao server hop)
+-- CONFIG
 ------------------------------------------------------------------
-local config = { farm = false, spin = false, fuse = {} }
+
+local config = {
+    farm = false,
+    spin = false,
+    fuse = {},
+    equipBest = false
+}
 
 pcall(function()
     if isfile and isfile(CONFIG_FILE) then
@@ -117,6 +117,7 @@ pcall(function()
         if type(data) == "table" then
             config.farm = data.farm == true
             config.spin = data.spin == true
+            config.equipBest = data.equipBest == true
             config.fuse = type(data.fuse) == "table" and data.fuse or {}
         end
     end
@@ -125,63 +126,73 @@ end)
 local function saveConfig()
     if dead() then return end
     pcall(function()
-        if writefile then writefile(CONFIG_FILE, HttpService:JSONEncode(config)) end
+        if writefile then
+            writefile(CONFIG_FILE, HttpService:JSONEncode(config))
+        end
     end)
 end
 
 ------------------------------------------------------------------
--- Fila para recarregar o script a cada teleporte
+-- QUEUE ON TELEPORT
 ------------------------------------------------------------------
+
 local qf = queue_on_teleport or queueonteleport
     or (syn and syn.queue_on_teleport)
     or (fluxus and fluxus.queue_on_teleport)
 
 local function queueScript()
     if not qf then return end
-    local idStrings = {}
-    for _, id in ipairs(ALLOWED_IDS) do table.insert(idStrings, string.format("%d", id)) end
-    local idList = table.concat(idStrings, ",")
+
+    local ids = {}
+    for _, id in ipairs(ALLOWED_IDS) do
+        table.insert(ids, tostring(id))
+    end
+
     local code = ([==[
         local allowed = false
         for _, id in ipairs({%s}) do
-            if game.PlaceId == id or game.GameId == id then allowed = true end
+            if game.PlaceId == id or game.GameId == id then
+                allowed = true
+            end
         end
         if not allowed then return end
         repeat task.wait() until game:IsLoaded()
         task.wait(2)
-        print("[RC2] Loader: executando script enfileirado...")
         local src
         pcall(function()
-            if isfile and isfile("%s") then src = readfile("%s") end
+            if isfile and isfile("%s") then
+                src = readfile("%s")
+            end
         end)
         if not src or #src < 200 then
-            local ok, res = pcall(function() return game:HttpGet("%s") end)
-            if ok then
-                src = res
-            else
-                warn("[RC2] Loader: falha ao baixar o script: " .. tostring(res))
-            end
+            local ok, res = pcall(function()
+                return game:HttpGet("%s")
+            end)
+            if ok then src = res end
         end
         local fn, err = loadstring(src or "")
         if not fn then
-            warn("[RC2] Loader: erro ao carregar o script: " .. tostring(err))
+            warn("[RC2] Erro: " .. tostring(err))
             return
         end
         fn()
-    ]==]):format(idList, LOCAL_FILE, LOCAL_FILE, SCRIPT_URL)
+    ]==]):format(table.concat(ids, ","), LOCAL_FILE, LOCAL_FILE, SCRIPT_URL)
+
     pcall(qf, code)
 end
 
 if qf then
     queueScript()
 else
-    warn("[RC2] Executor sem queue_on_teleport. Coloque o script na pasta autoexec!")
+    warn("[RC2] queue_on_teleport indisponível.")
 end
 
 ------------------------------------------------------------------
--- Status
+-- STATUS
 ------------------------------------------------------------------
+
 local statusLabel
+
 local function setStatus(text)
     if statusLabel and statusLabel.Parent then
         statusLabel.Text = "Status: " .. tostring(text)
@@ -189,9 +200,11 @@ local function setStatus(text)
 end
 
 ------------------------------------------------------------------
--- Server hop
+-- SERVER HOP
 ------------------------------------------------------------------
+
 local hopping = false
+
 local function serverHop()
     if hopping or dead() or not config.farm then return end
     hopping = true
@@ -199,44 +212,63 @@ local function serverHop()
 
     local candidates = {}
     local cursor = ""
+
     for _ = 1, 3 do
         local ok, result = pcall(function()
-            local url = "https://games.roblox.com/v1/games/" .. game.PlaceId
+            local url = "https://games.roblox.com/v1/games/"
+                .. game.PlaceId
                 .. "/servers/Public?sortOrder=Asc&limit=100"
-                .. (cursor ~= "" and ("&cursor=" .. cursor) or "")
+                .. (cursor ~= "" and "&cursor=" .. cursor or "")
             return HttpService:JSONDecode(game:HttpGet(url))
         end)
+
         if not ok or not result or not result.data then break end
+
         for _, s in ipairs(result.data) do
             if s.id ~= game.JobId and s.playing < s.maxPlayers - 1 then
                 table.insert(candidates, s.id)
             end
         end
+
         cursor = result.nextPageCursor or ""
         if cursor == "" then break end
     end
 
     hopping = false
     if dead() or not config.farm then return end
+
     queueScript()
+
     if #candidates > 0 then
         local id = candidates[math.random(#candidates)]
-        pcall(TeleportService.TeleportToPlaceInstance, TeleportService, game.PlaceId, id, LocalPlayer)
+        pcall(function()
+            TeleportService:TeleportToPlaceInstance(
+                game.PlaceId, id, LocalPlayer
+            )
+        end)
     else
-        pcall(TeleportService.Teleport, TeleportService, game.PlaceId, LocalPlayer)
+        pcall(function()
+            TeleportService:Teleport(game.PlaceId, LocalPlayer)
+        end)
     end
 end
 
-table.insert(connections, TeleportService.TeleportInitFailed:Connect(function(_, _, msg)
-    warn("[RC2] Teleporte falhou: " .. tostring(msg))
+table.insert(connections, TeleportService.TeleportInitFailed:Connect(function()
     task.wait(3)
     serverHop()
 end))
 
 ------------------------------------------------------------------
--- Auto Nests
+-- AUTO NESTS
 ------------------------------------------------------------------
-local RETURN_CFRAME = CFrame.new(20, 5.83, -28, 0, 0, -1, 1, 0, 0, 0, -1, 0)
+
+local RETURN_CFRAME = CFrame.new(
+    20, 5.83, -28,
+    0, 0, -1,
+    1, 0, 0,
+    0, -1, 0
+)
+
 local promptConnected = false
 
 local function fixPrompt(obj)
@@ -247,15 +279,22 @@ local function fixPrompt(obj)
 end
 
 local function enablePrompts()
-    for _, obj in ipairs(Workspace:GetDescendants()) do fixPrompt(obj) end
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        fixPrompt(obj)
+    end
+
     if not promptConnected then
         promptConnected = true
-        table.insert(connections, Workspace.DescendantAdded:Connect(fixPrompt))
+        table.insert(connections,
+            Workspace.DescendantAdded:Connect(fixPrompt)
+        )
     end
 end
 
 local function getObjectCFrame(obj)
-    if obj:IsA("BasePart") then return obj.CFrame end
+    if obj:IsA("BasePart") then
+        return obj.CFrame
+    end
     if obj:IsA("Model") then
         return obj.PrimaryPart and obj.PrimaryPart.CFrame or obj:GetPivot()
     end
@@ -263,15 +302,21 @@ end
 
 local function forceInteract(target)
     local prompt = target:FindFirstChildWhichIsA("ProximityPrompt", true)
+
     if prompt then
         fixPrompt(prompt)
-        pcall(function() if fireproximityprompt then fireproximityprompt(prompt) end end)
+        pcall(function()
+            if fireproximityprompt then
+                fireproximityprompt(prompt)
+            end
+        end)
         pcall(function()
             prompt:InputHoldBegin()
             task.wait(0.05)
             prompt:InputHoldEnd()
         end)
     end
+
     task.wait(0.1)
     VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
     task.wait(0.2)
@@ -286,9 +331,11 @@ end
 local function runFarm()
     farmToken += 1
     local my = farmToken
-    local function alive() return config.farm and my == farmToken and not dead() end
 
-    -- Failsafe: se travar, troca de servidor
+    local function alive()
+        return config.farm and my == farmToken and not dead()
+    end
+
     task.delay(MAX_RUNTIME, function()
         if alive() then
             setStatus("Tempo limite, trocando...")
@@ -303,36 +350,47 @@ local function runFarm()
 
         local terreiro8
         local start = tick()
+
         while alive() and not terreiro8 and tick() - start < 30 do
             terreiro8 = Workspace:FindFirstChild("Terreiro8", true)
             if not terreiro8 then task.wait(0.5) end
         end
+
         if not alive() then return end
 
         local nests = terreiro8 and terreiro8:FindFirstChild("Nests")
         if not nests then
-            warn("[RC2] Terreiro8/Nests não encontrado, trocando de servidor.")
+            warn("[RC2] Terreiro8/Nests não encontrado.")
             return serverHop()
         end
 
         local list = nests:GetChildren()
+
         for i, nest in ipairs(list) do
             if not alive() then return end
+
             local cf = getObjectCFrame(nest)
             if cf then
                 setStatus(("Nest %d/%d"):format(i, #list))
+
                 local root = getRoot()
-                if root then root.CFrame = cf + Vector3.new(0, 1.5, 0) end
+                if root then
+                    root.CFrame = cf + Vector3.new(0, 1.5, 0)
+                end
+
                 task.wait(0.3)
                 forceInteract(nest)
                 task.wait(0.2)
+
                 root = getRoot()
                 if root then root.CFrame = RETURN_CFRAME end
+
                 task.wait(0.6)
             end
         end
 
         if not alive() then return end
+
         setStatus("Finalizado, trocando...")
         task.wait(1)
         serverHop()
@@ -342,6 +400,7 @@ end
 local function setFarm(on)
     config.farm = on
     saveConfig()
+
     if on then
         runFarm()
     else
@@ -351,53 +410,111 @@ local function setFarm(on)
 end
 
 ------------------------------------------------------------------
--- Fuse loops (um por personagem/nível)
+-- FUSE
 ------------------------------------------------------------------
+
 local function setFuse(name, level, on)
     local key = name .. ":" .. level
     config.fuse[key] = on or nil
     fuseTokens[key] = (fuseTokens[key] or 0) + 1
     saveConfig()
+
     if not on then return end
 
     local my = fuseTokens[key]
+
     task.spawn(function()
         local remotes = ReplicatedStorage:WaitForChild("Remotes", 15)
         local fuse = remotes and remotes:WaitForChild("Fuse", 15)
+
         if not fuse then
             warn("[RC2] Remote Fuse não encontrado!")
             return
         end
-        while not dead() and fuseTokens[key] == my and config.fuse[key] do
-            pcall(function() fuse:InvokeServer(name, level) end)
+
+        while not dead()
+            and fuseTokens[key] == my
+            and config.fuse[key] do
+
+            pcall(function()
+                fuse:InvokeServer(name, level)
+            end)
+
             task.wait(FUSE_DELAY)
         end
     end)
 end
 
 ------------------------------------------------------------------
--- Auto Spin
+-- AUTO SPIN
 ------------------------------------------------------------------
-local SPIN_DELAY = 0 -- 0 = o mais rápido possível (task.wait())
+
+local SPIN_DELAY = 0
 
 local function setSpin(on)
     config.spin = on and true or false
     spinToken += 1
     saveConfig()
+
     if not on then return end
 
     local my = spinToken
+
     task.spawn(function()
         local remotes = ReplicatedStorage:WaitForChild("Remotes", 15)
         local spin = remotes and remotes:WaitForChild("Spin", 15)
+
         if not spin then
             warn("[RC2] Remote Spin não encontrado!")
             notify("Remote Spin não encontrado!")
             return
         end
-        while not dead() and spinToken == my and config.spin do
-            pcall(function() spin:InvokeServer() end)
+
+        while not dead()
+            and spinToken == my
+            and config.spin do
+
+            pcall(function()
+                spin:InvokeServer()
+            end)
+
             task.wait(SPIN_DELAY)
+        end
+    end)
+end
+
+------------------------------------------------------------------
+-- AUTO EQUIP BEST
+------------------------------------------------------------------
+
+local function setEquipBest(on)
+    config.equipBest = on and true or false
+    equipBestToken += 1
+    saveConfig()
+
+    if not on then return end
+
+    local my = equipBestToken
+
+    task.spawn(function()
+        local remotes = ReplicatedStorage:WaitForChild("Remotes", 15)
+        local shop = remotes and remotes:WaitForChild("Shop", 15)
+
+        if not shop then
+            warn("[RC2] Remote Shop não encontrado!")
+            notify("Remote Shop não encontrado!")
+            return
+        end
+
+        while not dead()
+            and equipBestToken == my
+            and config.equipBest do
+
+            pcall(function()
+                shop:InvokeServer("equipBest")
+            end)
+
+            task.wait(EQUIP_BEST_DELAY)
         end
     end)
 end
@@ -405,6 +522,7 @@ end
 ------------------------------------------------------------------
 -- HUD
 ------------------------------------------------------------------
+
 local ON_COLOR = Color3.fromRGB(46, 160, 90)
 local OFF_COLOR = Color3.fromRGB(58, 58, 68)
 local BG_COLOR = Color3.fromRGB(24, 24, 30)
@@ -413,28 +531,45 @@ local TOP_COLOR = Color3.fromRGB(36, 36, 46)
 local toggles = {}
 local hudHidden = false
 
--- Remove HUDs antigos (de instâncias anteriores) em todos os locais possíveis
 local function destroyOldGuis()
     local parents = {}
-    pcall(function() if gethui then table.insert(parents, gethui()) end end)
-    pcall(function() table.insert(parents, game:GetService("CoreGui")) end)
-    pcall(function() table.insert(parents, LocalPlayer:FindFirstChild("PlayerGui")) end)
+
+    pcall(function()
+        if gethui then table.insert(parents, gethui()) end
+    end)
+
+    pcall(function()
+        table.insert(parents, game:GetService("CoreGui"))
+    end)
+
+    pcall(function()
+        table.insert(parents, LocalPlayer:FindFirstChild("PlayerGui"))
+    end)
+
     for _, p in ipairs(parents) do
         pcall(function()
             for _, child in ipairs(p:GetChildren()) do
-                if child.Name == "RC2_HUD" then child:Destroy() end
+                if child.Name == "RC2_HUD" then
+                    child:Destroy()
+                end
             end
         end)
     end
 end
 
 local function attachGui(g)
-    pcall(function() if syn and syn.protect_gui then syn.protect_gui(g) end end)
+    pcall(function()
+        if syn and syn.protect_gui then syn.protect_gui(g) end
+    end)
 
-    local ok = pcall(function() g.Parent = gethui() end)
+    local ok = pcall(function()
+        g.Parent = gethui()
+    end)
     if ok and g.Parent then return "gethui" end
 
-    ok = pcall(function() g.Parent = game:GetService("CoreGui") end)
+    ok = pcall(function()
+        g.Parent = game:GetService("CoreGui")
+    end)
     if ok and g.Parent then return "CoreGui" end
 
     g.Parent = LocalPlayer:WaitForChild("PlayerGui")
@@ -444,9 +579,16 @@ end
 local function buildGui()
     destroyOldGuis()
     toggles = {}
+
     local order = 0
-    local function nextOrder() order += 1 return order end
-    if dragConn then pcall(function() dragConn:Disconnect() end) end
+    local function nextOrder()
+        order += 1
+        return order
+    end
+
+    if dragConn then
+        pcall(function() dragConn:Disconnect() end)
+    end
 
     gui = Instance.new("ScreenGui")
     gui.Name = "RC2_HUD"
@@ -468,7 +610,6 @@ local function buildGui()
     local frameLayout = Instance.new("UIListLayout", frame)
     frameLayout.SortOrder = Enum.SortOrder.LayoutOrder
 
-    -- Barra de título (arrastável)
     local title = Instance.new("Frame")
     title.Size = UDim2.new(1, 0, 0, 30)
     title.BackgroundColor3 = TOP_COLOR
@@ -521,22 +662,29 @@ local function buildGui()
         minBtn.Text = content.Visible and "-" or "+"
     end)
 
-    -- Arrastar
     local dragging, dragStart, startPos
+
     title.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1
             or input.UserInputType == Enum.UserInputType.Touch then
+
             dragging = true
             dragStart = input.Position
             startPos = frame.Position
+
             input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then dragging = false end
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
             end)
         end
     end)
+
     dragConn = UserInputService.InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
-            or input.UserInputType == Enum.UserInputType.Touch) then
+        if dragging and (
+            input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch
+        ) then
             local d = input.Position - dragStart
             frame.Position = UDim2.new(
                 startPos.X.Scale, startPos.X.Offset + d.X,
@@ -545,7 +693,6 @@ local function buildGui()
         end
     end)
 
-    -- Helpers
     local function makeLabel(text, size)
         local l = Instance.new("TextLabel")
         l.Size = UDim2.new(1, 0, 0, size or 18)
@@ -566,59 +713,83 @@ local function buildGui()
         btn.Font = Enum.Font.GothamMedium
         btn.TextSize = 13
         btn.TextColor3 = Color3.new(1, 1, 1)
+
         if compact then
             btn.Size = UDim2.new(0.25, -3, 1, 0)
         else
             btn.Size = UDim2.new(1, 0, 0, 28)
             btn.LayoutOrder = nextOrder()
         end
+
         btn.Parent = parent
         Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
 
         local state = initial and true or false
+
         local function render()
             btn.BackgroundColor3 = state and ON_COLOR or OFF_COLOR
-            btn.Text = compact and text or (text .. (state and "  [ON]" or "  [OFF]"))
+            btn.Text = compact and text
+                or (text .. (state and "  [ON]" or "  [OFF]"))
         end
+
         local t = {}
+
         function t.Set(v, silent)
             state = v and true or false
             render()
             if not silent then onChange(state) end
         end
-        btn.MouseButton1Click:Connect(function() t.Set(not state) end)
+
+        btn.MouseButton1Click:Connect(function()
+            t.Set(not state)
+        end)
+
         render()
         table.insert(toggles, t)
         return t
     end
 
-    -- Seção: Auto Farm
+    -- Auto Farm
     makeLabel("AUTO FARM")
     makeToggle(content, "Auto Nests + Hop", config.farm, setFarm)
     statusLabel = makeLabel(config.farm and "Status: Ligado" or "Status: Parado")
 
-    -- Seção: Auto Spin
+    -- Auto Spin
     makeLabel("SPIN")
     makeToggle(content, "Auto Spin", config.spin, setSpin)
 
-    -- Seção: Fuse
+    -- Equip Best
+    makeLabel("SHOP")
+    makeToggle(content, "Equip Best", config.equipBest, setEquipBest)
+
+    -- Fuse
     makeLabel("FUSE (níveis 1 a 4)")
+
     for _, name in ipairs(FUSE_NAMES) do
         makeLabel(name)
+
         local row = Instance.new("Frame")
         row.Size = UDim2.new(1, 0, 0, 26)
         row.BackgroundTransparency = 1
         row.LayoutOrder = nextOrder()
         row.Parent = content
+
         local rowLayout = Instance.new("UIListLayout", row)
         rowLayout.FillDirection = Enum.FillDirection.Horizontal
         rowLayout.Padding = UDim.new(0, 4)
 
         for _, level in ipairs(FUSE_LEVELS) do
             local key = name .. ":" .. level
-            makeToggle(row, tostring(level), config.fuse[key] == true, function(on)
-                setFuse(name, level, on)
-            end, true)
+
+            makeToggle(
+                row,
+                tostring(level),
+                config.fuse[key] == true,
+                function(on)
+                    setFuse(name, level, on)
+                end,
+                true
+            )
         end
     end
 
@@ -630,15 +801,19 @@ local function buildGui()
 end
 
 ------------------------------------------------------------------
--- Atalhos
+-- ATALHOS
 ------------------------------------------------------------------
+
 local function stopAll()
-    for _, t in ipairs(toggles) do t.Set(false) end -- dispara os callbacks e salva
+    for _, t in ipairs(toggles) do
+        t.Set(false)
+    end
     warn("[RC2] Tudo desligado.")
 end
 
 table.insert(connections, UserInputService.InputBegan:Connect(function(input, gp)
     if gp then return end
+
     if input.KeyCode == Enum.KeyCode.End then
         stopAll()
     elseif input.KeyCode == Enum.KeyCode.Insert then
@@ -648,15 +823,16 @@ table.insert(connections, UserInputService.InputBegan:Connect(function(input, gp
 end))
 
 ------------------------------------------------------------------
--- Inicialização
+-- INICIALIZAÇÃO
 ------------------------------------------------------------------
+
 buildGui()
 
--- Vigia: se o HUD sumir (jogo apagou, executor limpou), recria sozinho
 task.spawn(function()
     while true do
         task.wait(1)
         if dead() then return end
+
         if not gui or not gui.Parent then
             warn("[RC2] HUD sumiu, recriando...")
             buildGui()
@@ -664,10 +840,10 @@ task.spawn(function()
     end
 end)
 
--- Retoma o que estava ligado (importante após o server hop)
 if config.farm then
     runFarm()
 end
+
 for _, name in ipairs(FUSE_NAMES) do
     for _, level in ipairs(FUSE_LEVELS) do
         if config.fuse[name .. ":" .. level] then
@@ -675,6 +851,11 @@ for _, name in ipairs(FUSE_NAMES) do
         end
     end
 end
+
 if config.spin then
     setSpin(true)
+end
+
+if config.equipBest then
+    setEquipBest(true)
 end
