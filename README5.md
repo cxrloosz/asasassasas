@@ -32,7 +32,7 @@ if not isAllowedGame() then
     return
 end
 
-local SCRIPT_URL = "https://raw.githubusercontent.com/cxrloosz/asasassasas/refs/heads/main/README5.md"
+local SCRIPT_URL = "https://raw.githubusercontent.com/cxrloosz/asasassasas/refs/heads/main/README4.md"
 local CONFIG_FILE = "rc2_config.json"
 local LOCAL_FILE = "rc2_hud.lua"
 
@@ -440,15 +440,17 @@ local function runExuLuaCheia()
         local exuObj
         local start = tick()
 
-        while alive() and not exuObj and tick() - start < 30 do
+        -- Procura o objeto no Workspace por até 15 segundos
+        while alive() and not exuObj and (tick() - start < 5) do
             exuObj = Workspace:FindFirstChild("Exu_ExuLuaCheia", true)
             if not exuObj then task.wait(0.5) end
         end
 
         if not alive() then return end
 
+        -- Se não achou após o tempo de busca, dá Server Hop direto
         if not exuObj then
-            setStatus("Exu Lua Cheia não encontrado, trocando...")
+            setStatus("Não encontrado, trocando de servidor...")
             task.wait(1)
             return serverHop()
         end
@@ -474,7 +476,7 @@ local function runExuLuaCheia()
 
         if not alive() then return end
 
-        setStatus("Exu Lua Cheia capturado, trocando...")
+        setStatus("Exu Lua Cheia processado, trocando...")
         task.wait(1)
         serverHop()
     end)
