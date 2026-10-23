@@ -22,7 +22,7 @@ if game.PlaceId ~= ALLOWED_ID and game.GameId ~= ALLOWED_ID then
     return
 end
 
-local SCRIPT_URL = "https://raw.githubusercontent.com/cxrloosz/rc2.lua/refs/heads/main/README.lua"
+local SCRIPT_URL = "https://raw.githubusercontent.com/cxrloosz/asasassasas/refs/heads/main/README.md"
 local CONFIG_FILE = "rc2_config.json"
 local LOCAL_FILE = "rc2_hud.lua" -- cópia deste script na pasta workspace do executor
 print("[RC2] Script iniciado | PlaceId: " .. tostring(game.PlaceId))
