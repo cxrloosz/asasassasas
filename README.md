@@ -63,11 +63,13 @@ local cleaned = false
 local gui, dragConn
 local connections = {}
 local farmToken = 0
+local spinToken = 0
 local fuseTokens = {}
 
 local function cleanup()
     cleaned = true
     farmToken += 1
+    spinToken += 1
     for k in pairs(fuseTokens) do fuseTokens[k] += 1 end
     for _, c in ipairs(connections) do pcall(function() c:Disconnect() end) end
     pcall(function() if dragConn then dragConn:Disconnect() end end)
@@ -107,13 +109,14 @@ if dead() then return end
 ------------------------------------------------------------------
 -- Config persistente (sobrevive ao server hop)
 ------------------------------------------------------------------
-local config = { farm = false, fuse = {} }
+local config = { farm = false, spin = false, fuse = {} }
 
 pcall(function()
     if isfile and isfile(CONFIG_FILE) then
         local data = HttpService:JSONDecode(readfile(CONFIG_FILE))
         if type(data) == "table" then
             config.farm = data.farm == true
+            config.spin = data.spin == true
             config.fuse = type(data.fuse) == "table" and data.fuse or {}
         end
     end
@@ -373,6 +376,33 @@ local function setFuse(name, level, on)
 end
 
 ------------------------------------------------------------------
+-- Auto Spin
+------------------------------------------------------------------
+local SPIN_DELAY = 0 -- 0 = o mais rápido possível (task.wait())
+
+local function setSpin(on)
+    config.spin = on and true or false
+    spinToken += 1
+    saveConfig()
+    if not on then return end
+
+    local my = spinToken
+    task.spawn(function()
+        local remotes = ReplicatedStorage:WaitForChild("Remotes", 15)
+        local spin = remotes and remotes:WaitForChild("Spin", 15)
+        if not spin then
+            warn("[RC2] Remote Spin não encontrado!")
+            notify("Remote Spin não encontrado!")
+            return
+        end
+        while not dead() and spinToken == my and config.spin do
+            pcall(function() spin:InvokeServer() end)
+            task.wait(SPIN_DELAY)
+        end
+    end)
+end
+
+------------------------------------------------------------------
 -- HUD
 ------------------------------------------------------------------
 local ON_COLOR = Color3.fromRGB(46, 160, 90)
@@ -567,6 +597,10 @@ local function buildGui()
     makeToggle(content, "Auto Nests + Hop", config.farm, setFarm)
     statusLabel = makeLabel(config.farm and "Status: Ligado" or "Status: Parado")
 
+    -- Seção: Auto Spin
+    makeLabel("SPIN")
+    makeToggle(content, "Auto Spin", config.spin, setSpin)
+
     -- Seção: Fuse
     makeLabel("FUSE (níveis 1 a 4)")
     for _, name in ipairs(FUSE_NAMES) do
@@ -640,4 +674,7 @@ for _, name in ipairs(FUSE_NAMES) do
             setFuse(name, level, true)
         end
     end
+end
+if config.spin then
+    setSpin(true)
 end
