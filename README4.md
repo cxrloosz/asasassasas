@@ -433,25 +433,25 @@ local function runExuLuaCheia()
     end)
 
     task.spawn(function()
-        setStatus("Procurando Exu Lua Cheia...")
+        setStatus("Procurando Exu Lua Cheia (4s)...")
         enablePrompts()
         getRoot()
 
         local exuObj
         local start = tick()
 
-        -- Procura o objeto no Workspace por até 15 segundos
-        while alive() and not exuObj and (tick() - start < 5) do
+        -- Busca pelo objeto no Workspace por exatamente 4 segundos
+        while alive() and not exuObj and (tick() - start < 4) do
             exuObj = Workspace:FindFirstChild("Exu_ExuLuaCheia", true)
-            if not exuObj then task.wait(0.5) end
+            if not exuObj then task.wait(0.2) end
         end
 
         if not alive() then return end
 
-        -- Se não achou após o tempo de busca, dá Server Hop direto
+        -- Se não achou após 4 segundos, realiza o serverHop imediatamente
         if not exuObj then
-            setStatus("Não encontrado, trocando de servidor...")
-            task.wait(1)
+            setStatus("Não encontrado (4s), trocando servidor...")
+            task.wait(0.5)
             return serverHop()
         end
 
@@ -477,7 +477,7 @@ local function runExuLuaCheia()
         if not alive() then return end
 
         setStatus("Exu Lua Cheia processado, trocando...")
-        task.wait(1)
+        task.wait(0.5)
         serverHop()
     end)
 end
