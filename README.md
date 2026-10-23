@@ -1,9 +1,33 @@
 -- RC2 HUD: Auto Nests + Server Hop + Fuse loops (com toggles)
 
+-- Notificação na tela (não depende do console)
+local function notify(text)
+    task.spawn(function()
+        for _ = 1, 10 do
+            local ok = pcall(function()
+                game:GetService("StarterGui"):SetCore("SendNotification", {
+                    Title = "RC2",
+                    Text = text,
+                    Duration = 8,
+                })
+            end)
+            if ok then break end
+            task.wait(0.5)
+        end
+    end)
+end
+
 -- Só roda no jogo específico (aceita PlaceId ou GameId/UniverseId)
-local ALLOWED_ID = 87029994390208
-if game.PlaceId ~= ALLOWED_ID and game.GameId ~= ALLOWED_ID then
+local ALLOWED_IDS = { 103076400317371 } -- PlaceIds (ou GameId) permitidos
+local function isAllowedGame()
+    for _, id in ipairs(ALLOWED_IDS) do
+        if game.PlaceId == id or game.GameId == id then return true end
+    end
+    return false
+end
+if not isAllowedGame() then
     -- Jogo errado: remove qualquer HUD/loop que tenha sobrado e encerra
+    notify("Jogo errado. PlaceId: " .. tostring(game.PlaceId) .. " | GameId: " .. tostring(game.GameId))
     warn("[RC2] Jogo diferente do permitido. PlaceId atual: " .. tostring(game.PlaceId)
         .. " | GameId atual: " .. tostring(game.GameId))
     pcall(function()
@@ -111,8 +135,15 @@ local qf = queue_on_teleport or queueonteleport
 
 local function queueScript()
     if not qf then return end
+    local idStrings = {}
+    for _, id in ipairs(ALLOWED_IDS) do table.insert(idStrings, string.format("%d", id)) end
+    local idList = table.concat(idStrings, ",")
     local code = ([==[
-        if game.PlaceId ~= %s and game.GameId ~= %s then return end
+        local allowed = false
+        for _, id in ipairs({%s}) do
+            if game.PlaceId == id or game.GameId == id then allowed = true end
+        end
+        if not allowed then return end
         repeat task.wait() until game:IsLoaded()
         task.wait(2)
         print("[RC2] Loader: executando script enfileirado...")
@@ -134,7 +165,7 @@ local function queueScript()
             return
         end
         fn()
-    ]==]):format(tostring(ALLOWED_ID), tostring(ALLOWED_ID), LOCAL_FILE, LOCAL_FILE, SCRIPT_URL)
+    ]==]):format(idList, LOCAL_FILE, LOCAL_FILE, SCRIPT_URL)
     pcall(qf, code)
 end
 
@@ -561,6 +592,7 @@ local function buildGui()
 
     local where = attachGui(gui)
     print("[RC2] HUD criado em: " .. where)
+    notify("HUD criado em: " .. where .. " (INSERT esconde/mostra)")
 end
 
 ------------------------------------------------------------------
