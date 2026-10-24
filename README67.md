@@ -32,7 +32,7 @@ if not isAllowedGame() then
     return
 end
 
-local SCRIPT_URL = "https://raw.githubusercontent.com/cxrloosz/asasassasas/refs/heads/main/README7.md"
+local SCRIPT_URL = "https://raw.githubusercontent.com/cxrloosz/asasassasas/refs/heads/main/README67.md"
 local CONFIG_FILE = "rc2_config.json"
 local LOCAL_FILE = "rc2_hud.lua"
 
@@ -250,41 +250,31 @@ local function hopEnabled()
     return config.farm or config.exuLuaCheia
 end
 
--- Servidores públicos com vaga (menos o atual)
+local MAX_ATTEMPTS = 3  -- buscas sem resultado antes de deixar o Roblox escolher
+
+-- Servidores públicos com vaga (menos o atual). Faz só 1 requisição por busca
+-- para não estourar o limite da API do Roblox (erro 429).
 local function fetchCandidates()
-    local candidates, failed = {}, false
+    local candidates = {}
 
-    for _, sortOrder in ipairs({ "Asc", "Desc" }) do
-        local cursor = ""
+    local ok, result = pcall(function()
+        local url = "https://games.roblox.com/v1/games/" .. game.PlaceId
+            .. "/servers/Public?sortOrder=" .. (math.random(2) == 1 and "Asc" or "Desc")
+            .. "&excludeFullGames=true&limit=100"
+        return HttpService:JSONDecode(game:HttpGet(url))
+    end)
 
-        for _ = 1, 2 do
-            local ok, result = pcall(function()
-                local url = "https://games.roblox.com/v1/games/" .. game.PlaceId
-                    .. "/servers/Public?sortOrder=" .. sortOrder
-                    .. "&excludeFullGames=true&limit=100"
-                    .. (cursor ~= "" and ("&cursor=" .. cursor) or "")
-                return HttpService:JSONDecode(game:HttpGet(url))
-            end)
-
-            if not ok or type(result) ~= "table" or type(result.data) ~= "table" then
-                failed = true
-                break
-            end
-
-            for _, s in ipairs(result.data) do
-                if s.id ~= game.JobId and s.playing < s.maxPlayers - 1 then
-                    table.insert(candidates, s.id)
-                end
-            end
-
-            cursor = result.nextPageCursor or ""
-            if cursor == "" or #candidates >= 15 then break end
-        end
-
-        if #candidates >= 15 or failed then break end
+    if not ok or type(result) ~= "table" or type(result.data) ~= "table" then
+        return candidates, true -- falhou (limite da API / bloqueio)
     end
 
-    return candidates, failed
+    for _, s in ipairs(result.data) do
+        if s.id ~= game.JobId and s.playing < s.maxPlayers - 1 then
+            table.insert(candidates, s.id)
+        end
+    end
+
+    return candidates, false
 end
 
 local function serverHop()
@@ -309,21 +299,22 @@ local function serverHop()
             break
         end
 
+        -- sem servidor (ou API limitada): depois de algumas tentativas
+        -- deixa o Roblox escolher o servidor
+        if attempts >= MAX_ATTEMPTS then
+            useFallback = true
+            break
+        end
+
         if failed then
-            -- API limitando as requisições: espera mais a cada falha seguida
+            -- API limitando as requisições: espera um pouco mais a cada falha
             failStreak += 1
-            local waitTime = math.min(10 * failStreak, 40)
+            local waitTime = 5 * failStreak
             setStatus(("API limitada, aguardando %ds... (%d)"):format(waitTime, attempts))
             task.wait(waitTime)
         else
             failStreak = 0
             task.wait(3)
-        end
-
-        -- não achou nada: deixa o Roblox escolher o servidor
-        if attempts >= 5 then
-            useFallback = true
-            break
         end
     end
 
