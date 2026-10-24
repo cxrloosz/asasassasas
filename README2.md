@@ -32,13 +32,13 @@ if not isAllowedGame() then
     return
 end
 
-local SCRIPT_URL = "https://raw.githubusercontent.com/cxrloosz/asasassasas/refs/heads/main/README1.md"
+local SCRIPT_URL = "https://raw.githubusercontent.com/cxrloosz/asasassasas/refs/heads/main/README2.md"
 local CONFIG_FILE = "rc2_config.json"
 local LOCAL_FILE = "rc2_hud.lua"
 
 local FUSE_DELAY = 0.15
 local MAX_RUNTIME = 120
-local FUSE_NAMES = { "ExuSeteChaves", "PombagiraRainha", "ExuVeludo", "ExuLuaNegra", "ExuEclipse" }
+local FUSE_NAMES = { "ExuSeteChaves", "PombagiraRainha", "ExuVeludo", "ExuLuaNegra", "ExuEclipse", "ExuLuaCheia" }
 local FUSE_LEVELS = { 1, 2, 3, 4 }
 local EQUIP_BEST_DELAY = 1
 
@@ -245,7 +245,7 @@ end
 ------------------------------------------------------------------
 
 local VISITED_FILE = "rc2_visited.json"
-local VISITED_TTL = 1800   -- segundos que um servidor visitado fica bloqueado
+local VISITED_TTL = 600    -- segundos que um servidor visitado fica bloqueado (10 min)
 local VISITED_MAX = 300    -- limite de servidores guardados
 
 local visited = {}
@@ -332,6 +332,12 @@ local function isVisited(id)
     return t ~= nil and os.time() - t <= VISITED_TTL
 end
 
+-- Limpa o histórico (o servidor atual continua marcado)
+local function resetVisited()
+    visited = {}
+    markVisited(game.JobId)
+end
+
 loadVisited()
 markVisited(game.JobId) -- o servidor atual já conta como visitado
 
@@ -345,7 +351,10 @@ local function hopEnabled()
     return config.farm or config.exuLuaCheia
 end
 
-local function fetchCandidates()
+local VISITED_RESET_AFTER = 2  -- buscas sem servidor novo até resetar o histórico
+local FALLBACK_AFTER = 8        -- buscas vazias até deixar o Roblox escolher (math.huge = nunca)
+
+local function fetchCandidates(allowNearFull)
     local candidates, failed = {}, false
 
     for _, sortOrder in ipairs({ "Asc", "Desc" }) do
@@ -366,16 +375,20 @@ local function fetchCandidates()
             end
 
             for _, s in ipairs(result.data) do
+                local limit = allowNearFull and s.maxPlayers or (s.maxPlayers - 1)
                 if s.id ~= game.JobId
                     and not isVisited(s.id)
-                    and s.playing < s.maxPlayers - 1 then
+                    and s.playing < limit then
                     table.insert(candidates, s.id)
                 end
             end
 
             cursor = result.nextPageCursor or ""
-            if cursor == "" then break end
+            if cursor == "" or #candidates >= 15 then break end
         end
+
+        -- já tem opções (ou a API falhou): não faz mais requisições
+        if #candidates >= 15 or failed then break end
     end
 
     return candidates, failed
@@ -389,40 +402,65 @@ local function serverHop()
     waitEclipseClear(function() return not dead() and hopEnabled() end)
 
     local chosen
-    local attempts = 0
+    local useFallback = false
+    local attempts, emptyStreak, failStreak = 0, 0, 0
 
     while not dead() and hopEnabled() do
         attempts += 1
         setStatus(("Procurando servidor novo... (%d)"):format(attempts))
 
-        local candidates, failed = fetchCandidates()
+        -- depois do primeiro reset, aceita também servidores quase cheios
+        local candidates, failed = fetchCandidates(emptyStreak >= VISITED_RESET_AFTER)
+
         if #candidates > 0 then
             chosen = candidates[math.random(#candidates)]
             break
         end
 
-        -- Sem servidor novo: a cada 4 tentativas libera a lista (menos o atual)
-        if attempts % 4 == 0 then
-            warn("[RC2] Sem servidores novos, liberando a lista de visitados.")
-            visited = {}
-            markVisited(game.JobId)
-        end
+        if failed then
+            -- API limitando as requisições: espera mais a cada falha seguida
+            failStreak += 1
+            local waitTime = math.min(10 * failStreak, 40)
+            setStatus(("API limitada, aguardando %ds... (%d)"):format(waitTime, attempts))
+            task.wait(waitTime)
+        else
+            failStreak = 0
+            emptyStreak += 1
 
-        task.wait(failed and 6 or 3)
+            -- nada de novo: reseta o histórico de visitados
+            if emptyStreak % VISITED_RESET_AFTER == 0 then
+                warn("[RC2] Sem servidores novos, resetando servidores visitados.")
+                resetVisited()
+            end
+
+            -- último recurso: deixa o Roblox escolher o servidor
+            if emptyStreak >= FALLBACK_AFTER then
+                useFallback = true
+                break
+            end
+
+            task.wait(3)
+        end
     end
 
-    if not chosen or dead() or not hopEnabled() then
+    if dead() or not hopEnabled() or (not chosen and not useFallback) then
         hopping = false
         return
     end
 
-    markVisited(chosen)
     queueScript()
     setStatus("Trocando de servidor...")
 
-    pcall(function()
-        TeleportService:TeleportToPlaceInstance(game.PlaceId, chosen, LocalPlayer)
-    end)
+    if chosen then
+        markVisited(chosen)
+        pcall(function()
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, chosen, LocalPlayer)
+        end)
+    else
+        pcall(function()
+            TeleportService:Teleport(game.PlaceId, LocalPlayer)
+        end)
+    end
 
     -- se o teleporte não acontecer, libera para tentar de novo
     task.delay(25, function()
@@ -1150,6 +1188,21 @@ local function buildGui()
     statusLabel = makeLabel(
         (config.farm or config.exuLuaCheia or config.eclipse) and "Status: Ligado" or "Status: Parado"
     )
+
+    local resetBtn = Instance.new("TextButton")
+    resetBtn.Size = UDim2.new(1, 0, 0, 24)
+    resetBtn.LayoutOrder = nextOrder()
+    resetBtn.BackgroundColor3 = OFF_COLOR
+    resetBtn.Text = "Resetar servidores visitados"
+    resetBtn.Font = Enum.Font.GothamMedium
+    resetBtn.TextSize = 12
+    resetBtn.TextColor3 = Color3.new(1, 1, 1)
+    resetBtn.Parent = content
+    Instance.new("UICorner", resetBtn).CornerRadius = UDim.new(0, 6)
+    resetBtn.MouseButton1Click:Connect(function()
+        resetVisited()
+        notify("Servidores visitados resetados")
+    end)
 
     -- Auto Spin
     makeLabel("SPIN")
