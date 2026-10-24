@@ -32,7 +32,7 @@ if not isAllowedGame() then
     return
 end
 
-local SCRIPT_URL = "https://raw.githubusercontent.com/cxrloosz/asasassasas/refs/heads/main/README4.md"
+local SCRIPT_URL = "https://raw.githubusercontent.com/cxrloosz/asasassasas/refs/heads/main/README7.md"
 local CONFIG_FILE = "rc2_config.json"
 local LOCAL_FILE = "rc2_hud.lua"
 
@@ -241,107 +241,6 @@ local function waitEclipseClear(aliveFn, onWait)
 end
 
 ------------------------------------------------------------------
--- SERVIDORES VISITADOS (não reentrar no mesmo servidor)
-------------------------------------------------------------------
-
-local VISITED_FILE = "rc2_visited.json"
-local VISITED_TTL = 600    -- segundos que um servidor visitado fica bloqueado (10 min)
-local VISITED_MAX = 300    -- limite de servidores guardados
-
-local visited = {}
-
-local function pruneVisited()
-    local now = os.time()
-    local count = 0
-
-    for id, t in pairs(visited) do
-        if type(t) ~= "number" or now - t > VISITED_TTL then
-            visited[id] = nil
-        else
-            count += 1
-        end
-    end
-
-    if count > VISITED_MAX then
-        local arr = {}
-        for id, t in pairs(visited) do
-            table.insert(arr, { id = id, t = t })
-        end
-        table.sort(arr, function(x, y) return x.t > y.t end)
-        visited = {}
-        for i = 1, VISITED_MAX do
-            visited[arr[i].id] = arr[i].t
-        end
-    end
-end
-
-local function saveVisited()
-    pcall(function()
-        if writefile then
-            writefile(VISITED_FILE, HttpService:JSONEncode(visited))
-        end
-    end)
-    pcall(function()
-        if getgenv then getgenv().RC2_VisitedServers = visited end
-    end)
-end
-
-local function loadVisited()
-    visited = {}
-
-    -- arquivo (sobrevive ao teleporte em qualquer executor)
-    pcall(function()
-        if isfile and isfile(VISITED_FILE) then
-            local data = HttpService:JSONDecode(readfile(VISITED_FILE))
-            if type(data) == "table" then
-                for id, t in pairs(data) do
-                    if type(id) == "string" and type(t) == "number" then
-                        visited[id] = t
-                    end
-                end
-            end
-        end
-    end)
-
-    -- memória do executor (se existir)
-    pcall(function()
-        if getgenv and type(getgenv().RC2_VisitedServers) == "table" then
-            for id, t in pairs(getgenv().RC2_VisitedServers) do
-                if type(id) == "string" then
-                    local n = type(t) == "number" and t or os.time()
-                    if not visited[id] or n > visited[id] then
-                        visited[id] = n
-                    end
-                end
-            end
-        end
-    end)
-
-    pruneVisited()
-end
-
-local function markVisited(id)
-    if not id or id == "" then return end
-    visited[id] = os.time()
-    pruneVisited()
-    saveVisited()
-end
-
-local function isVisited(id)
-    local t = visited[id]
-    return t ~= nil and os.time() - t <= VISITED_TTL
-end
-
--- Limpa o histórico (o servidor atual continua marcado)
-local function resetVisited()
-    visited = {}
-    markVisited(game.JobId)
-end
-
-loadVisited()
-markVisited(game.JobId) -- o servidor atual já conta como visitado
-
-------------------------------------------------------------------
 -- SERVER HOP
 ------------------------------------------------------------------
 
@@ -351,16 +250,14 @@ local function hopEnabled()
     return config.farm or config.exuLuaCheia
 end
 
-local RESET_AFTER_SECONDS = 20  -- segundos procurando até resetar os servidores visitados
-local FALLBACK_AFTER = 12       -- buscas vazias até deixar o Roblox escolher (math.huge = nunca)
-
-local function fetchCandidates(allowNearFull)
+-- Servidores públicos com vaga (menos o atual)
+local function fetchCandidates()
     local candidates, failed = {}, false
 
     for _, sortOrder in ipairs({ "Asc", "Desc" }) do
         local cursor = ""
 
-        for _ = 1, 3 do
+        for _ = 1, 2 do
             local ok, result = pcall(function()
                 local url = "https://games.roblox.com/v1/games/" .. game.PlaceId
                     .. "/servers/Public?sortOrder=" .. sortOrder
@@ -375,10 +272,7 @@ local function fetchCandidates(allowNearFull)
             end
 
             for _, s in ipairs(result.data) do
-                local limit = allowNearFull and s.maxPlayers or (s.maxPlayers - 1)
-                if s.id ~= game.JobId
-                    and not isVisited(s.id)
-                    and s.playing < limit then
+                if s.id ~= game.JobId and s.playing < s.maxPlayers - 1 then
                     table.insert(candidates, s.id)
                 end
             end
@@ -387,7 +281,6 @@ local function fetchCandidates(allowNearFull)
             if cursor == "" or #candidates >= 15 then break end
         end
 
-        -- já tem opções (ou a API falhou): não faz mais requisições
         if #candidates >= 15 or failed then break end
     end
 
@@ -403,16 +296,13 @@ local function serverHop()
 
     local chosen
     local useFallback = false
-    local attempts, emptyStreak, failStreak = 0, 0, 0
-    local lastReset = tick()   -- quando a lista de visitados foi resetada pela última vez
-    local resetDone = false
+    local attempts, failStreak = 0, 0
 
     while not dead() and hopEnabled() do
         attempts += 1
-        setStatus(("Procurando servidor novo... (%d)"):format(attempts))
+        setStatus(("Procurando servidor... (%d)"):format(attempts))
 
-        -- depois do primeiro reset, aceita também servidores quase cheios
-        local candidates, failed = fetchCandidates(resetDone)
+        local candidates, failed = fetchCandidates()
 
         if #candidates > 0 then
             chosen = candidates[math.random(#candidates)]
@@ -427,23 +317,13 @@ local function serverHop()
             task.wait(waitTime)
         else
             failStreak = 0
-            emptyStreak += 1
-
-            -- último recurso: deixa o Roblox escolher o servidor
-            if emptyStreak >= FALLBACK_AFTER then
-                useFallback = true
-                break
-            end
-
             task.wait(3)
         end
 
-        -- passou o tempo de espera: reseta os servidores visitados (a cada 20s)
-        if tick() - lastReset >= RESET_AFTER_SECONDS then
-            warn("[RC2] " .. RESET_AFTER_SECONDS .. "s sem servidor novo, resetando servidores visitados.")
-            resetVisited()
-            lastReset = tick()
-            resetDone = true
+        -- não achou nada: deixa o Roblox escolher o servidor
+        if attempts >= 5 then
+            useFallback = true
+            break
         end
     end
 
@@ -456,7 +336,6 @@ local function serverHop()
     setStatus("Trocando de servidor...")
 
     if chosen then
-        markVisited(chosen)
         pcall(function()
             TeleportService:TeleportToPlaceInstance(game.PlaceId, chosen, LocalPlayer)
         end)
@@ -1192,21 +1071,6 @@ local function buildGui()
     statusLabel = makeLabel(
         (config.farm or config.exuLuaCheia or config.eclipse) and "Status: Ligado" or "Status: Parado"
     )
-
-    local resetBtn = Instance.new("TextButton")
-    resetBtn.Size = UDim2.new(1, 0, 0, 24)
-    resetBtn.LayoutOrder = nextOrder()
-    resetBtn.BackgroundColor3 = OFF_COLOR
-    resetBtn.Text = "Resetar servidores visitados"
-    resetBtn.Font = Enum.Font.GothamMedium
-    resetBtn.TextSize = 12
-    resetBtn.TextColor3 = Color3.new(1, 1, 1)
-    resetBtn.Parent = content
-    Instance.new("UICorner", resetBtn).CornerRadius = UDim.new(0, 6)
-    resetBtn.MouseButton1Click:Connect(function()
-        resetVisited()
-        notify("Servidores visitados resetados")
-    end)
 
     -- Auto Spin
     makeLabel("SPIN")
