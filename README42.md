@@ -32,7 +32,7 @@ if not isAllowedGame() then
     return
 end
 
-local SCRIPT_URL = "https://raw.githubusercontent.com/cxrloosz/asasassasas/refs/heads/main/README4.md"
+local SCRIPT_URL = "https://raw.githubusercontent.com/cxrloosz/asasassasas/refs/heads/main/README42.md"
 local CONFIG_FILE = "rc2_config.json"
 local LOCAL_FILE = "rc2_hud.lua"
 
@@ -53,6 +53,7 @@ local connections = {}
 local farmToken = 0
 local spinToken = 0
 local equipBestToken = 0
+local rebirthToken = 0
 local luaCheiaToken = 0
 local eclipseToken = 0
 local fuseTokens = {}
@@ -62,6 +63,7 @@ local function cleanup()
     farmToken += 1
     spinToken += 1
     equipBestToken += 1
+    rebirthToken += 1
     luaCheiaToken += 1
     eclipseToken += 1
     for k in pairs(fuseTokens) do
@@ -118,7 +120,8 @@ local config = {
     fuse = {},
     equipBest = false,
     exuLuaCheia = false,
-    eclipse = false
+    eclipse = false,
+    rebirth = false
 }
 
 pcall(function()
@@ -130,6 +133,7 @@ pcall(function()
             config.equipBest = data.equipBest == true
             config.exuLuaCheia = data.exuLuaCheia == true
             config.eclipse = data.eclipse == true
+            config.rebirth = data.rebirth == true
             config.fuse = type(data.fuse) == "table" and data.fuse or {}
         end
     end
@@ -868,6 +872,44 @@ local function setEquipBest(on)
 end
 
 ------------------------------------------------------------------
+-- AUTO REBIRTH
+------------------------------------------------------------------
+
+local REBIRTH_DELAY = 0 -- 0 = o mais rápido possível (task.wait())
+
+local function setRebirth(on)
+    config.rebirth = on and true or false
+    rebirthToken += 1
+    saveConfig()
+
+    if not on then return end
+
+    local my = rebirthToken
+
+    task.spawn(function()
+        local remotes = ReplicatedStorage:WaitForChild("Remotes", 15)
+        local rewards = remotes and remotes:WaitForChild("Rewards", 15)
+
+        if not rewards then
+            warn("[RC2] Remote Rewards não encontrado!")
+            notify("Remote Rewards não encontrado!")
+            return
+        end
+
+        while not dead()
+            and rebirthToken == my
+            and config.rebirth do
+
+            pcall(function()
+                rewards:InvokeServer("rebirth")
+            end)
+
+            task.wait(REBIRTH_DELAY)
+        end
+    end)
+end
+
+------------------------------------------------------------------
 -- HUD
 ------------------------------------------------------------------
 
@@ -1121,6 +1163,7 @@ local function buildGui()
     -- Equip Best
     makeLabel("SHOP")
     makeToggle(content, "Equip Best", config.equipBest, setEquipBest)
+    makeToggle(content, "Auto Rebirth", config.rebirth, setRebirth)
 
     -- Fuse
     makeLabel("FUSE (níveis 1 a 4)")
@@ -1226,4 +1269,8 @@ end
 
 if config.equipBest then
     setEquipBest(true)
+end
+
+if config.rebirth then
+    setRebirth(true)
 end
