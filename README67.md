@@ -438,19 +438,19 @@ local function runFarm()
         enablePrompts()
         getRoot()
 
-        local terreiro8
+        local terreiro9
         local start = tick()
 
-        while alive() and not terreiro8 and tick() - start < 30 do
-            terreiro8 = Workspace:FindFirstChild("Terreiro8", true)
-            if not terreiro8 then task.wait(0.5) end
+        while alive() and not terreiro9 and tick() - start < 30 do
+            terreiro9 = Workspace:FindFirstChild("terreiro9", true)
+            if not terreiro9 then task.wait(0.5) end
         end
 
         if not alive() then return end
 
-        local nests = terreiro8 and terreiro8:FindFirstChild("Nests")
+        local nests = terreiro9 and terreiro9:FindFirstChild("Nests")
         if not nests then
-            warn("[RC2] Terreiro8/Nests não encontrado.")
+            warn("[RC2] terreiro9/Nests não encontrado.")
             return serverHop()
         end
 
