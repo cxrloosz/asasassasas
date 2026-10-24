@@ -1,4 +1,4 @@
--- RC2 HUD: Auto Nests + Server Hop + Fuse + Auto Spin + Equip Best + Exu Lua Cheia
+-- RC2 HUD: Auto Nests + Server Hop + Fuse + Auto Spin + Equip Best + Exu Lua Cheia/Sete Chaves + EclipseExu
 
 local function notify(text)
     task.spawn(function()
@@ -32,13 +32,13 @@ if not isAllowedGame() then
     return
 end
 
-local SCRIPT_URL = "https://raw.githubusercontent.com/cxrloosz/asasassasas/refs/heads/main/README4.md"
+local SCRIPT_URL = "https://raw.githubusercontent.com/cxrloosz/asasassasas/refs/heads/main/README1.md"
 local CONFIG_FILE = "rc2_config.json"
 local LOCAL_FILE = "rc2_hud.lua"
 
 local FUSE_DELAY = 0.15
 local MAX_RUNTIME = 120
-local FUSE_NAMES = { "ExuSeteChaves", "PombagiraRainha", "ExuVeludo" }
+local FUSE_NAMES = { "ExuSeteChaves", "PombagiraRainha", "ExuVeludo", "ExuLuaNegra", "ExuEclipse" }
 local FUSE_LEVELS = { 1, 2, 3, 4 }
 local EQUIP_BEST_DELAY = 1
 
@@ -50,17 +50,8 @@ local farmToken = 0
 local spinToken = 0
 local equipBestToken = 0
 local luaCheiaToken = 0
+local eclipseToken = 0
 local fuseTokens = {}
-
--- Inicializa o histórico de servidores visitados para evitar loops
-if getgenv then
-    if not getgenv().RC2_VisitedServers then
-        getgenv().RC2_VisitedServers = {}
-    end
-    if game.JobId and game.JobId ~= "" then
-        getgenv().RC2_VisitedServers[game.JobId] = true
-    end
-end
 
 local function cleanup()
     cleaned = true
@@ -68,6 +59,7 @@ local function cleanup()
     spinToken += 1
     equipBestToken += 1
     luaCheiaToken += 1
+    eclipseToken += 1
     for k in pairs(fuseTokens) do
         fuseTokens[k] += 1
     end
@@ -121,7 +113,8 @@ local config = {
     spin = false,
     fuse = {},
     equipBest = false,
-    exuLuaCheia = false
+    exuLuaCheia = false,
+    eclipse = false
 }
 
 pcall(function()
@@ -132,6 +125,7 @@ pcall(function()
             config.spin = data.spin == true
             config.equipBest = data.equipBest == true
             config.exuLuaCheia = data.exuLuaCheia == true
+            config.eclipse = data.eclipse == true
             config.fuse = type(data.fuse) == "table" and data.fuse or {}
         end
     end
@@ -214,36 +208,166 @@ local function setStatus(text)
 end
 
 ------------------------------------------------------------------
--- SERVER HOP (ATUALIZADO COM ANT-LOOP)
+-- ECLIPSEEXU (PRIORIDADE)
+------------------------------------------------------------------
+
+-- Acha todos os EclipseExu que existem agora no mapa
+local function getEclipseTargets()
+    local targets = {}
+    local realm = Workspace:FindFirstChild("EclipseRealm", true)
+    if not realm then return targets end
+
+    if realm.Name == "EclipseExu" and (realm:IsA("Model") or realm:IsA("BasePart")) then
+        table.insert(targets, realm)
+    end
+
+    for _, obj in ipairs(realm:GetDescendants()) do
+        if obj.Name == "EclipseExu" and (obj:IsA("Model") or obj:IsA("BasePart")) then
+            table.insert(targets, obj)
+        end
+    end
+
+    return targets
+end
+
+-- Enquanto o toggle do EclipseExu estiver ligado e existir algum no mapa,
+-- as outras rotinas (Nests, Lua Cheia, troca de servidor) esperam.
+local function waitEclipseClear(aliveFn, onWait)
+    while aliveFn() and config.eclipse and #getEclipseTargets() > 0 do
+        setStatus("Aguardando EclipseExu sumirem...")
+        if onWait then onWait() end
+        task.wait(1)
+    end
+end
+
+------------------------------------------------------------------
+-- SERVIDORES VISITADOS (não reentrar no mesmo servidor)
+------------------------------------------------------------------
+
+local VISITED_FILE = "rc2_visited.json"
+local VISITED_TTL = 1800   -- segundos que um servidor visitado fica bloqueado
+local VISITED_MAX = 300    -- limite de servidores guardados
+
+local visited = {}
+
+local function pruneVisited()
+    local now = os.time()
+    local count = 0
+
+    for id, t in pairs(visited) do
+        if type(t) ~= "number" or now - t > VISITED_TTL then
+            visited[id] = nil
+        else
+            count += 1
+        end
+    end
+
+    if count > VISITED_MAX then
+        local arr = {}
+        for id, t in pairs(visited) do
+            table.insert(arr, { id = id, t = t })
+        end
+        table.sort(arr, function(x, y) return x.t > y.t end)
+        visited = {}
+        for i = 1, VISITED_MAX do
+            visited[arr[i].id] = arr[i].t
+        end
+    end
+end
+
+local function saveVisited()
+    pcall(function()
+        if writefile then
+            writefile(VISITED_FILE, HttpService:JSONEncode(visited))
+        end
+    end)
+    pcall(function()
+        if getgenv then getgenv().RC2_VisitedServers = visited end
+    end)
+end
+
+local function loadVisited()
+    visited = {}
+
+    -- arquivo (sobrevive ao teleporte em qualquer executor)
+    pcall(function()
+        if isfile and isfile(VISITED_FILE) then
+            local data = HttpService:JSONDecode(readfile(VISITED_FILE))
+            if type(data) == "table" then
+                for id, t in pairs(data) do
+                    if type(id) == "string" and type(t) == "number" then
+                        visited[id] = t
+                    end
+                end
+            end
+        end
+    end)
+
+    -- memória do executor (se existir)
+    pcall(function()
+        if getgenv and type(getgenv().RC2_VisitedServers) == "table" then
+            for id, t in pairs(getgenv().RC2_VisitedServers) do
+                if type(id) == "string" then
+                    local n = type(t) == "number" and t or os.time()
+                    if not visited[id] or n > visited[id] then
+                        visited[id] = n
+                    end
+                end
+            end
+        end
+    end)
+
+    pruneVisited()
+end
+
+local function markVisited(id)
+    if not id or id == "" then return end
+    visited[id] = os.time()
+    pruneVisited()
+    saveVisited()
+end
+
+local function isVisited(id)
+    local t = visited[id]
+    return t ~= nil and os.time() - t <= VISITED_TTL
+end
+
+loadVisited()
+markVisited(game.JobId) -- o servidor atual já conta como visitado
+
+------------------------------------------------------------------
+-- SERVER HOP
 ------------------------------------------------------------------
 
 local hopping = false
 
-local function serverHop()
-    if hopping or dead() or (not config.farm and not config.exuLuaCheia) then return end
-    hopping = true
-    setStatus("Procurando servidor novo...")
+local function hopEnabled()
+    return config.farm or config.exuLuaCheia
+end
 
-    local candidates = {}
+local function fetchCandidates()
+    local candidates, failed = {}, false
 
-    -- Tenta buscar em ordens diferentes (Asc e Desc) para pegar servidores variados
-    for _, sortOrder in ipairs({"Asc", "Desc"}) do
+    for _, sortOrder in ipairs({ "Asc", "Desc" }) do
         local cursor = ""
-        for _ = 1, 2 do
+
+        for _ = 1, 3 do
             local ok, result = pcall(function()
-                local url = "https://games.roblox.com/v1/games/"
-                    .. game.PlaceId
-                    .. "/servers/Public?sortOrder=" .. sortOrder .. "&limit=100"
-                    .. (cursor ~= "" and "&cursor=" .. cursor or "")
+                local url = "https://games.roblox.com/v1/games/" .. game.PlaceId
+                    .. "/servers/Public?sortOrder=" .. sortOrder
+                    .. "&excludeFullGames=true&limit=100"
+                    .. (cursor ~= "" and ("&cursor=" .. cursor) or "")
                 return HttpService:JSONDecode(game:HttpGet(url))
             end)
 
-            if not ok or not result or not result.data then break end
+            if not ok or type(result) ~= "table" or type(result.data) ~= "table" then
+                failed = true
+                break
+            end
 
             for _, s in ipairs(result.data) do
-                -- Ignora o servidor atual e servidores que já visitou nesta sessão
-                if s.id ~= game.JobId 
-                    and not (getgenv().RC2_VisitedServers and getgenv().RC2_VisitedServers[s.id])
+                if s.id ~= game.JobId
+                    and not isVisited(s.id)
                     and s.playing < s.maxPlayers - 1 then
                     table.insert(candidates, s.id)
                 end
@@ -254,46 +378,60 @@ local function serverHop()
         end
     end
 
-    -- Se esgotou todos os servidores não visitados, limpa o histórico para não travar
-    if #candidates == 0 and getgenv() then
-        getgenv().RC2_VisitedServers = { [game.JobId] = true }
-        -- Faz uma busca rápida padrão para pegar qualquer um disponível
-        local ok, result = pcall(function()
-            local url = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"
-            return HttpService:JSONDecode(game:HttpGet(url))
-        end)
-        if ok and result and result.data then
-            for _, s in ipairs(result.data) do
-                if s.id ~= game.JobId and s.playing < s.maxPlayers - 1 then
-                    table.insert(candidates, s.id)
-                end
-            end
+    return candidates, failed
+end
+
+local function serverHop()
+    if hopping or dead() or not hopEnabled() then return end
+    hopping = true
+
+    -- EclipseExu tem prioridade: não sai enquanto existir algum
+    waitEclipseClear(function() return not dead() and hopEnabled() end)
+
+    local chosen
+    local attempts = 0
+
+    while not dead() and hopEnabled() do
+        attempts += 1
+        setStatus(("Procurando servidor novo... (%d)"):format(attempts))
+
+        local candidates, failed = fetchCandidates()
+        if #candidates > 0 then
+            chosen = candidates[math.random(#candidates)]
+            break
         end
+
+        -- Sem servidor novo: a cada 4 tentativas libera a lista (menos o atual)
+        if attempts % 4 == 0 then
+            warn("[RC2] Sem servidores novos, liberando a lista de visitados.")
+            visited = {}
+            markVisited(game.JobId)
+        end
+
+        task.wait(failed and 6 or 3)
     end
 
-    hopping = false
-    if dead() or (not config.farm and not config.exuLuaCheia) then return end
+    if not chosen or dead() or not hopEnabled() then
+        hopping = false
+        return
+    end
 
+    markVisited(chosen)
     queueScript()
+    setStatus("Trocando de servidor...")
 
-    if #candidates > 0 then
-        local id = candidates[math.random(#candidates)]
-        if getgenv() and getgenv().RC2_VisitedServers then
-            getgenv().RC2_VisitedServers[id] = true
-        end
-        pcall(function()
-            TeleportService:TeleportToPlaceInstance(
-                game.PlaceId, id, LocalPlayer
-            )
-        end)
-    else
-        pcall(function()
-            TeleportService:Teleport(game.PlaceId, LocalPlayer)
-        end)
-    end
+    pcall(function()
+        TeleportService:TeleportToPlaceInstance(game.PlaceId, chosen, LocalPlayer)
+    end)
+
+    -- se o teleporte não acontecer, libera para tentar de novo
+    task.delay(25, function()
+        hopping = false
+    end)
 end
 
 table.insert(connections, TeleportService.TeleportInitFailed:Connect(function()
+    hopping = false
     task.wait(3)
     serverHop()
 end))
@@ -409,6 +547,10 @@ local function runFarm()
         for i, nest in ipairs(list) do
             if not alive() then return end
 
+            -- EclipseExu tem prioridade
+            waitEclipseClear(alive)
+            if not alive() then return end
+
             local cf = getObjectCFrame(nest)
             if cf then
                 setStatus(("Nest %d/%d"):format(i, #list))
@@ -450,8 +592,36 @@ local function setFarm(on)
 end
 
 ------------------------------------------------------------------
--- AUTO EXU LUA CHEIA
+-- AUTO EXU LUA CHEIA + SETE CHAVES (mesmo toggle)
 ------------------------------------------------------------------
+
+local EXU_TARGET_NAMES = {
+    Exu_ExuLuaCheia = true,
+    Exu_ExuSeteChaves = true,
+}
+
+local function findExuTargets()
+    local found = {}
+
+    local function isTarget(obj)
+        return EXU_TARGET_NAMES[obj.Name] and (obj:IsA("Model") or obj:IsA("BasePart"))
+    end
+
+    local runtime = Workspace:FindFirstChild("Runtime")
+    if runtime then
+        for _, obj in ipairs(runtime:GetChildren()) do
+            if isTarget(obj) then table.insert(found, obj) end
+        end
+    end
+
+    if #found == 0 then
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if isTarget(obj) then table.insert(found, obj) end
+        end
+    end
+
+    return found
+end
 
 local function runExuLuaCheia()
     luaCheiaToken += 1
@@ -461,56 +631,81 @@ local function runExuLuaCheia()
         return config.exuLuaCheia and my == luaCheiaToken and not dead()
     end
 
-    task.delay(MAX_RUNTIME, function()
-        if alive() then
-            setStatus("Tempo limite Exu Lua Cheia, trocando...")
-            serverHop()
+    -- Failsafe: o prazo é renovado enquanto espera os EclipseExu
+    local deadline = tick() + MAX_RUNTIME
+    local function extendDeadline()
+        deadline = tick() + MAX_RUNTIME
+    end
+
+    task.spawn(function()
+        while alive() do
+            task.wait(1)
+            if tick() > deadline then
+                setStatus("Tempo limite, trocando...")
+                serverHop()
+                return
+            end
         end
     end)
 
     task.spawn(function()
-        setStatus("Procurando Exu Lua Cheia (4s)...")
         enablePrompts()
         getRoot()
 
-        local exuObj
+        -- EclipseExu tem prioridade: só continua quando todos sumirem
+        waitEclipseClear(alive, extendDeadline)
+        if not alive() then return end
+
+        setStatus("Procurando Lua Cheia / Sete Chaves (4s)...")
+
+        local targets = {}
         local start = tick()
 
-        while alive() and not exuObj and (tick() - start < 4) do
-            exuObj = Workspace:FindFirstChild("Exu_ExuLuaCheia", true)
-            if not exuObj then task.wait(0.2) end
+        while alive() and #targets == 0 and (tick() - start < 4) do
+            targets = findExuTargets()
+            if #targets == 0 then task.wait(0.2) end
         end
 
         if not alive() then return end
 
-        if not exuObj then
+        if #targets == 0 then
             setStatus("Não encontrado (4s), trocando servidor...")
             task.wait(0.5)
             return serverHop()
         end
 
-        local cf = getObjectCFrame(exuObj)
-        if cf then
-            setStatus("Capturando Exu Lua Cheia...")
+        for i, obj in ipairs(targets) do
+            if not alive() then return end
 
-            local root = getRoot()
-            if root then
-                root.CFrame = cf + Vector3.new(0, 1.5, 0)
+            -- se um EclipseExu aparecer no meio do caminho, espera ele sumir
+            waitEclipseClear(alive, extendDeadline)
+            if not alive() then return end
+
+            if obj:IsDescendantOf(Workspace) then
+                local cf = getObjectCFrame(obj)
+                if cf then
+                    setStatus(("Capturando %s (%d/%d)..."):format(obj.Name, i, #targets))
+
+                    local root = getRoot()
+                    if root then
+                        root.CFrame = cf + Vector3.new(0, 1.5, 0)
+                    end
+
+                    task.wait(0.3)
+                    forceInteract(obj)
+                    task.wait(0.2)
+
+                    root = getRoot()
+                    if root then root.CFrame = RETURN_CFRAME end
+
+                    task.wait(0.6)
+                end
             end
-
-            task.wait(0.3)
-            forceInteract(exuObj)
-            task.wait(0.2)
-
-            root = getRoot()
-            if root then root.CFrame = RETURN_CFRAME end
-
-            task.wait(0.6)
         end
 
         if not alive() then return end
 
-        setStatus("Exu Lua Cheia processado, trocando...")
+        setStatus("Exus processados, trocando...")
         task.wait(0.5)
         serverHop()
     end)
@@ -525,6 +720,77 @@ local function setExuLuaCheia(on)
     else
         luaCheiaToken += 1
         setStatus("Parado")
+    end
+end
+
+------------------------------------------------------------------
+-- AUTO ECLIPSEEXU
+------------------------------------------------------------------
+
+local SAFE_CFRAME = CFrame.new(
+    2, 900.280029, -5182,
+    0, -1, 0,
+    1, 0, 0,
+    0, 0, 1
+)
+
+local function runEclipse()
+    eclipseToken += 1
+    local my = eclipseToken
+
+    local function alive()
+        return config.eclipse and my == eclipseToken and not dead()
+    end
+
+    task.spawn(function()
+        enablePrompts()
+
+        while alive() do
+            local targets = getEclipseTargets()
+
+            if #targets == 0 then
+                task.wait(1)
+            else
+                for i, target in ipairs(targets) do
+                    if not alive() then return end
+
+                    if target:IsDescendantOf(Workspace) then
+                        local cf = getObjectCFrame(target)
+                        if cf then
+                            setStatus(("EclipseExu %d/%d"):format(i, #targets))
+
+                            local root = getRoot()
+                            if root then
+                                root.CFrame = cf + Vector3.new(0, 1.5, 0)
+                            end
+
+                            task.wait(0.4)
+                            forceInteract(target)
+                            task.wait(0.2)
+
+                            root = getRoot()
+                            if root then root.CFrame = SAFE_CFRAME end
+
+                            task.wait(0.5)
+                        end
+                    end
+                end
+
+                task.wait(0.3)
+            end
+        end
+    end)
+end
+
+local function setEclipse(on)
+    config.eclipse = on
+    saveConfig()
+
+    if on then
+        runEclipse()
+    else
+        eclipseToken += 1
+        setStatus("EclipseExu desligado")
     end
 end
 
@@ -759,9 +1025,13 @@ local function buildGui()
     minBtn.Parent = title
     Instance.new("UICorner", minBtn).CornerRadius = UDim.new(0, 5)
 
-    local content = Instance.new("Frame")
-    content.Size = UDim2.new(1, 0, 0, 0)
-    content.AutomaticSize = Enum.AutomaticSize.Y
+    local content = Instance.new("ScrollingFrame")
+    content.Size = UDim2.new(1, 0, 0, 340)
+    content.CanvasSize = UDim2.new(0, 0, 0, 0)
+    content.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    content.ScrollBarThickness = 4
+    content.ScrollingDirection = Enum.ScrollingDirection.Y
+    content.BorderSizePixel = 0
     content.BackgroundTransparency = 1
     content.LayoutOrder = 2
     content.Parent = frame
@@ -838,6 +1108,10 @@ local function buildGui()
         else
             btn.Size = UDim2.new(1, 0, 0, 28)
             btn.LayoutOrder = nextOrder()
+            btn.TextScaled = true
+            local sizeLimit = Instance.new("UITextSizeConstraint")
+            sizeLimit.MaxTextSize = 13
+            sizeLimit.Parent = btn
         end
 
         btn.Parent = parent
@@ -871,8 +1145,11 @@ local function buildGui()
     -- Auto Farm
     makeLabel("AUTO FARM")
     makeToggle(content, "Auto Nests + Hop", config.farm, setFarm)
-    makeToggle(content, "Auto Exu Lua Cheia", config.exuLuaCheia, setExuLuaCheia)
-    statusLabel = makeLabel((config.farm or config.exuLuaCheia) and "Status: Ligado" or "Status: Parado")
+    makeToggle(content, "Auto Lua Cheia + Sete Chaves", config.exuLuaCheia, setExuLuaCheia)
+    makeToggle(content, "Auto EclipseExu (prioridade)", config.eclipse, setEclipse)
+    statusLabel = makeLabel(
+        (config.farm or config.exuLuaCheia or config.eclipse) and "Status: Ligado" or "Status: Parado"
+    )
 
     -- Auto Spin
     makeLabel("SPIN")
@@ -959,6 +1236,10 @@ task.spawn(function()
         end
     end
 end)
+
+if config.eclipse then
+    runEclipse()
+end
 
 if config.farm then
     runFarm()
