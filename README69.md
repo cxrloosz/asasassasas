@@ -32,7 +32,7 @@ if not isAllowedGame() then
     return
 end
 
-local SCRIPT_URL = "https://raw.githubusercontent.com/cxrloosz/asasassasas/refs/heads/main/README69.md"
+local SCRIPT_URL = "https://raw.githubusercontent.com/cxrloosz/asasassasas/refs/heads/main/README4.md"
 local CONFIG_FILE = "rc2_config.json"
 local LOCAL_FILE = "rc2_hud.lua"
 
@@ -41,6 +41,10 @@ local MAX_RUNTIME = 120
 local FUSE_NAMES = { "ExuSeteChaves", "PombagiraRainha", "ExuVeludo", "ExuLuaNegra", "ExuEclipse", "ExuLuaCheia" }
 local FUSE_LEVELS = { 1, 2, 3, 4 }
 local EQUIP_BEST_DELAY = 1
+
+-- Terreiro(s) usados pelo Auto Nests. Lista vazia {} = usa todos os que existirem.
+-- Ex.: { "Terreiro9" }  ou  { "Terreiro8", "Terreiro9" }  ou  {}
+local TERREIRO_NAMES = { "Terreiro9" }
 
 local INSTANCE_ID = tostring(math.random(1, 1e9)) .. "-" .. tostring(os.clock())
 local cleaned = false
@@ -418,6 +422,42 @@ local function getRoot()
     return char:WaitForChild("HumanoidRootPart", 10)
 end
 
+-- Acha os terreiros (Terreiro1, Terreiro2...) que têm a pasta Nests
+local function findTerreiros()
+    local wanted, useAll = {}, true
+    for _, n in ipairs(TERREIRO_NAMES) do
+        wanted[n] = true
+        useAll = false
+    end
+
+    local found = {}
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj.Name:match("^Terreiro%d+$") and (useAll or wanted[obj.Name]) then
+            local nests = obj:FindFirstChild("Nests")
+            if nests then
+                table.insert(found, { terreiro = obj, nests = nests })
+            end
+        end
+    end
+    return found
+end
+
+-- Nomes de todos os terreiros que existem no servidor (para diagnóstico)
+local function listTerreiroNames()
+    local seen, names = {}, {}
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj.Name:match("^Terreiro%d+$") and not seen[obj.Name] then
+            seen[obj.Name] = true
+            table.insert(names, obj.Name)
+        end
+    end
+    table.sort(names)
+    if #names == 0 then return "nenhum" end
+    return table.concat(names, ", ")
+end
+
+local terreiroDiagShown = false
+
 local function runFarm()
     farmToken += 1
     local my = farmToken
@@ -438,23 +478,34 @@ local function runFarm()
         enablePrompts()
         getRoot()
 
-        local Terreiro9
+        local terreiros = {}
         local start = tick()
 
-        while alive() and not Terreiro9 and tick() - start < 30 do
-            Terreiro9 = Workspace:FindFirstChild("Terreiro9", true)
-            if not Terreiro9 then task.wait(0.5) end
+        while alive() and #terreiros == 0 and tick() - start < 30 do
+            terreiros = findTerreiros()
+            if #terreiros == 0 then task.wait(1) end
         end
 
         if not alive() then return end
 
-        local nests = Terreiro9 and Terreiro9:FindFirstChild("Nests")
-        if not nests then
-            warn("[RC2] Terreiro9/Nests não encontrado.")
+        if #terreiros == 0 then
+            local names = listTerreiroNames()
+            warn("[RC2] Terreiro/Nests não encontrado. Existem: " .. names)
+            if not terreiroDiagShown then
+                terreiroDiagShown = true
+                notify(("Terreiro não achado (%s). Existem: %s")
+                    :format(table.concat(TERREIRO_NAMES, ", "), names):sub(1, 180))
+            end
             return serverHop()
         end
 
-        local list = nests:GetChildren()
+        -- junta os Nests de todos os terreiros escolhidos
+        local list = {}
+        for _, t in ipairs(terreiros) do
+            for _, nest in ipairs(t.nests:GetChildren()) do
+                table.insert(list, nest)
+            end
+        end
 
         for i, nest in ipairs(list) do
             if not alive() then return end
