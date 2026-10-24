@@ -32,7 +32,7 @@ if not isAllowedGame() then
     return
 end
 
-local SCRIPT_URL = "https://raw.githubusercontent.com/cxrloosz/asasassasas/refs/heads/main/README2.md"
+local SCRIPT_URL = "https://raw.githubusercontent.com/cxrloosz/asasassasas/refs/heads/main/README4.md"
 local CONFIG_FILE = "rc2_config.json"
 local LOCAL_FILE = "rc2_hud.lua"
 
@@ -351,8 +351,8 @@ local function hopEnabled()
     return config.farm or config.exuLuaCheia
 end
 
-local VISITED_RESET_AFTER = 2  -- buscas sem servidor novo até resetar o histórico
-local FALLBACK_AFTER = 8        -- buscas vazias até deixar o Roblox escolher (math.huge = nunca)
+local RESET_AFTER_SECONDS = 20  -- segundos procurando até resetar os servidores visitados
+local FALLBACK_AFTER = 12       -- buscas vazias até deixar o Roblox escolher (math.huge = nunca)
 
 local function fetchCandidates(allowNearFull)
     local candidates, failed = {}, false
@@ -404,13 +404,15 @@ local function serverHop()
     local chosen
     local useFallback = false
     local attempts, emptyStreak, failStreak = 0, 0, 0
+    local lastReset = tick()   -- quando a lista de visitados foi resetada pela última vez
+    local resetDone = false
 
     while not dead() and hopEnabled() do
         attempts += 1
         setStatus(("Procurando servidor novo... (%d)"):format(attempts))
 
         -- depois do primeiro reset, aceita também servidores quase cheios
-        local candidates, failed = fetchCandidates(emptyStreak >= VISITED_RESET_AFTER)
+        local candidates, failed = fetchCandidates(resetDone)
 
         if #candidates > 0 then
             chosen = candidates[math.random(#candidates)]
@@ -427,12 +429,6 @@ local function serverHop()
             failStreak = 0
             emptyStreak += 1
 
-            -- nada de novo: reseta o histórico de visitados
-            if emptyStreak % VISITED_RESET_AFTER == 0 then
-                warn("[RC2] Sem servidores novos, resetando servidores visitados.")
-                resetVisited()
-            end
-
             -- último recurso: deixa o Roblox escolher o servidor
             if emptyStreak >= FALLBACK_AFTER then
                 useFallback = true
@@ -440,6 +436,14 @@ local function serverHop()
             end
 
             task.wait(3)
+        end
+
+        -- passou o tempo de espera: reseta os servidores visitados (a cada 20s)
+        if tick() - lastReset >= RESET_AFTER_SECONDS then
+            warn("[RC2] " .. RESET_AFTER_SECONDS .. "s sem servidor novo, resetando servidores visitados.")
+            resetVisited()
+            lastReset = tick()
+            resetDone = true
         end
     end
 
